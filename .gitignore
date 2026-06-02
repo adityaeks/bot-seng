@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Environment variables (contains sensitive data)
+.env
+
+# WhatsApp session data (contains auth tokens)
+session/
+
+# Log files
+logs/
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Editor directories and files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# PM2 logs
+.pm2/
+
+# Puppeteer cache
+.cache/
