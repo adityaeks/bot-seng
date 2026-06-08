@@ -28,6 +28,7 @@ class WhatsAppService {
   constructor() {
     const puppeteerOptions = {
       headless: true,
+      protocolTimeout: 0, // Disable protocol timeout to prevent Runtime.callFunctionOn timeout on slow VPS
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
