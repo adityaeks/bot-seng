@@ -26,6 +26,15 @@ function getChromePath() {
 
 class WhatsAppService {
   constructor() {
+    this.isReady = false;
+    this.isReconnecting = false;
+    this.initClient();
+  }
+
+  /**
+   * Create and configure the Client instance
+   */
+  initClient() {
     const puppeteerOptions = {
       headless: true,
       protocolTimeout: 0, // Disable protocol timeout to prevent Runtime.callFunctionOn timeout on slow VPS
@@ -53,7 +62,6 @@ class WhatsAppService {
       puppeteer: puppeteerOptions
     });
 
-    this.isReady = false;
     this.initEventListeners();
   }
 
@@ -190,6 +198,58 @@ class WhatsAppService {
   }
 
   /**
+   * Verify if the Puppeteer page context is healthy and responsive
+   * @returns {Promise<boolean>}
+   */
+  async checkPageHealth() {
+    try {
+      if (!this.client || !this.client.pupPage) {
+        return false;
+      }
+      if (this.client.pupPage.isClosed()) {
+        return false;
+      }
+      
+      // Simple timeout wrapper for evaluate
+      const evalPromise = this.client.pupPage.evaluate(() => 1);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Evaluation timeout')), 5000)
+      );
+
+      await Promise.race([evalPromise, timeoutPromise]);
+      return true;
+    } catch (err) {
+      logger.warn(`WhatsApp client page health check failed: ${err.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Helper to wait for the client to be ready, with a timeout
+   * @param {number} timeoutMs
+   * @returns {Promise<boolean>} Resolves to true if ready, false if timeout
+   */
+  async waitForReady(timeoutMs = 60000) {
+    if (this.isReady) return true;
+
+    return new Promise((resolve) => {
+      const interval = 100;
+      let elapsed = 0;
+      const timer = setInterval(() => {
+        if (this.isReady) {
+          clearInterval(timer);
+          resolve(true);
+        }
+        elapsed += interval;
+        if (elapsed >= timeoutMs) {
+          clearInterval(timer);
+          resolve(false);
+        }
+      }, interval);
+    });
+  }
+
+  /**
    * Start the WhatsApp client connection
    */
   async initialize() {
@@ -206,14 +266,35 @@ class WhatsAppService {
    * Reconnect implementation when disconnected
    */
   async reconnect() {
+    if (this.isReconnecting) {
+      logger.info('Reconnection is already in progress, skipping duplicate request.');
+      return;
+    }
+    this.isReconnecting = true;
     logger.info('Attempting to reconnect WhatsApp Client...');
+    this.isReady = false;
+
     try {
-      await this.client.destroy();
-      this.isReady = false;
-      // Re-initialize client
+      if (this.client) {
+        logger.info('Destroying existing client...');
+        try {
+          await this.client.destroy();
+        } catch (destroyErr) {
+          logger.warn(`Error during client.destroy(): ${destroyErr.message}`);
+        }
+      }
+    } catch (err) {
+      logger.error(`Error tearing down client: ${err.message}`);
+    }
+
+    try {
+      logger.info('Creating a new WhatsApp client instance...');
+      this.initClient();
       await this.client.initialize();
     } catch (error) {
       logger.error(`Failed to reconnect WhatsApp: ${error.message}`);
+    } finally {
+      this.isReconnecting = false;
     }
   }
 
@@ -221,16 +302,32 @@ class WhatsAppService {
    * Send a text message to target WhatsApp number
    * @param {string} targetId - Formatted target WhatsApp ID (e.g. 628xxxxxxxxxx@c.us)
    * @param {string} text - Message text to send
+   * @param {number} retryCount - Number of connection retries allowed
    * @returns {Promise<boolean>} Resolves to true if successful, false otherwise
    */
-  async sendMessage(targetId, text) {
-    if (!this.isReady) {
-      logger.error(`Cannot send message: WhatsApp client is not ready yet.`);
+  async sendMessage(targetId, text, retryCount = 1) {
+    if (!targetId) {
+      logger.error('Cannot send message: Target number is missing.');
       return false;
     }
 
-    if (!targetId) {
-      logger.error('Cannot send message: Target number is missing.');
+    // Check page health first
+    const healthy = await this.checkPageHealth();
+    if (!healthy) {
+      logger.warn('WhatsApp page health check failed. Attempting to heal client before sending...');
+      this.isReady = false;
+      await this.reconnect();
+      
+      logger.info('Waiting for WhatsApp client to become ready after healing...');
+      const ready = await this.waitForReady(60000);
+      if (!ready) {
+        logger.error('WhatsApp client failed to become ready after healing. Aborting message send.');
+        return false;
+      }
+    }
+
+    if (!this.isReady) {
+      logger.error(`Cannot send message: WhatsApp client is not ready.`);
       return false;
     }
 
@@ -251,6 +348,28 @@ class WhatsAppService {
       return true;
     } catch (error) {
       logger.error(`Failed to send message to ${targetId}. Error: ${error.message}`);
+      
+      // If we have retries left and the error looks like a browser/frame/puppeteer failure, try to heal and retry
+      const isBrowserError = error.message.includes('detached Frame') || 
+                            error.message.includes('Execution context was destroyed') || 
+                            error.message.includes('Target closed') || 
+                            error.message.includes('Session closed') ||
+                            error.message.includes('Protocol error');
+                            
+      if (retryCount > 0 && isBrowserError) {
+        logger.warn(`Detected Puppeteer connection/browser failure. Reconnecting and retrying send (retries left: ${retryCount})...`);
+        this.isReady = false;
+        await this.reconnect();
+        
+        logger.info('Waiting for WhatsApp client to become ready for retry...');
+        const ready = await this.waitForReady(60000);
+        if (ready) {
+          return this.sendMessage(targetId, text, retryCount - 1);
+        } else {
+          logger.error('WhatsApp client failed to become ready for retry. Aborting.');
+        }
+      }
+      
       return false;
     }
   }
