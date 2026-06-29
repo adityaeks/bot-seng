@@ -23,12 +23,32 @@ function getTimestamp() {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
+const LOG_LEVELS = {
+  'INFO': 1,
+  'SUCCESS': 2,
+  'WARN': 3,
+  'ERROR': 4
+};
+
+/**
+ * Get minimum log level from environment variables dynamically
+ */
+function getMinLogLevel() {
+  const envLevel = (process.env.LOG_LEVEL || 'INFO').toUpperCase();
+  return LOG_LEVELS[envLevel] || 1;
+}
+
 /**
  * Write log to file and console
  * @param {string} level 
  * @param {string} message 
  */
 function log(level, message) {
+  const levelPriority = LOG_LEVELS[level] || 1;
+  if (levelPriority < getMinLogLevel()) {
+    return; // Skip logging if below threshold
+  }
+
   const timestamp = getTimestamp();
   const logMessage = `[${timestamp}] [${level}] ${message}\n`;
   
@@ -51,8 +71,19 @@ function log(level, message) {
   
   console.log(`${color}[${timestamp}] [${level}] ${message}\x1b[0m`);
   
-  // Append to log file
+  // Append to log file with rotation (Max 10MB)
   try {
+    if (fs.existsSync(logFile)) {
+      const stats = fs.statSync(logFile);
+      const maxSize = 10 * 1024 * 1024; // 10 MB limit
+      if (stats.size > maxSize) {
+        const backupFile = path.join(logDir, 'app.log.old');
+        if (fs.existsSync(backupFile)) {
+          fs.unlinkSync(backupFile); // delete old backup
+        }
+        fs.renameSync(logFile, backupFile); // rotate active log to backup
+      }
+    }
     fs.appendFileSync(logFile, logMessage, 'utf8');
   } catch (err) {
     console.error('Failed to write to log file:', err);
