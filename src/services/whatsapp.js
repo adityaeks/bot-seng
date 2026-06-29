@@ -2,6 +2,7 @@ import whatsappWeb from 'whatsapp-web.js';
 const { Client, LocalAuth } = whatsappWeb;
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
+import { EventEmitter } from 'events';
 import { logger } from '../utils/logger.js';
 import { config } from '../config/config.js';
 
@@ -24,8 +25,9 @@ function getChromePath() {
   return undefined;
 }
 
-class WhatsAppService {
+class WhatsAppService extends EventEmitter {
   constructor() {
+    super();
     this.isReady = false;
     this.isReconnecting = false;
     this.initClient();
@@ -37,7 +39,7 @@ class WhatsAppService {
   initClient() {
     const puppeteerOptions = {
       headless: true,
-      protocolTimeout: 0, // Disable protocol timeout to prevent Runtime.callFunctionOn timeout on slow VPS
+      protocolTimeout: 60000, // Timeout after 60s instead of hanging infinitely on slow VPS
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -89,6 +91,7 @@ class WhatsAppService {
     this.client.on('ready', () => {
       this.isReady = true;
       logger.success('WhatsApp Client is ready and connected!');
+      this.emit('ready');
     });
 
     // Disconnected event

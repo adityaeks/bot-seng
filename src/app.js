@@ -32,7 +32,7 @@ async function main() {
     await whatsappService.initialize();
 
     // Start scheduling jobs or execute direct trigger once ready
-    whatsappService.client.once('ready', async () => {
+    whatsappService.once('ready', async () => {
       if (triggerType) {
         logger.info(`Direct Trigger active. Sending [${triggerType}] reminder...`);
         try {
